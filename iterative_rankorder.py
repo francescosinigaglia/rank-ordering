@@ -1,5 +1,5 @@
 import numpy as np
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 from numba import njit, prange
 import time
 
@@ -173,8 +173,8 @@ def get_power(fsignal, Nbin, kmax, dk, kmode, power, nmode, nc):
 
 # Import fields
 
-if niter<=1:
-    correct_power = False
+if niter>1:
+    correct_power = True
 
 raw1 = np.fromfile(filename, dtype=np.float32)
 raw1 = np.reshape(raw1, (ngrid,ngrid,ngrid))

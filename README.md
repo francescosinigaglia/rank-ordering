@@ -8,3 +8,4 @@ niter = 1, correct power = True/False depending on whether you want/don't want t
 To perform the iterative rank ordering set:
 niter = N, where N is the desired number of iterations. In this case it is meaningless not to compensate for the error introduced in the P(k), so the correct_power parameter is automatically set = True. 
 
+The code uses the Numba package (https://numba.pydata.org) and is currently tested with Numba version 0.58.0.
