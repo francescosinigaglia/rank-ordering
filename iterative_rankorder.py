@@ -16,9 +16,9 @@ correct_power = False
 filename = '../dm_field_alpt_hydro_rankorder_256.DAT'
 target_filename = '../../../../L500N1024_2/z2.0/DensityDM.z2_0.sim2.n256.rspace.dat'
 
-outfilename = '../TEST_nothing.dat'
+outfilename = '../test.dat'
 
-apply_linear_rescaling = False
+apply_linear_rescaling = True
 
 apply_nl_transform = False
 calibrate_nl_transform = False
