@@ -8,19 +8,21 @@ import scipy.ndimage
 ngrid = 256
 lbox = 1000
 
-ntarget = 1024
+ntarget = 256
 
 niter = 1
 correct_power = False
 
-filename = 'dm_field_abacus_rankorder.DAT'
-target_filename = 'dm_field_random1_tetcorr.DAT'
+filename = '../dm_field_alpt_hydro_rankorder_256.DAT'
+target_filename = '../../../../L500N1024_2/z2.0/DensityDM.z2_0.sim2.n256.rspace.dat'
 
-outfilename = 'out_field.dat'
+outfilename = '../TEST_nothing.dat'
 
-apply_nl_transform = True
-calibrate_nl_transform = True
-base_nl = 1.35
+apply_linear_rescaling = False
+
+apply_nl_transform = False
+calibrate_nl_transform = False
+base_nl = 0.11749676
 
 # WARNING:
 # The correct_power option makes sense only in the case in which niter>1.
@@ -36,7 +38,10 @@ base_nl = 1.35
 seed = 123456 # Arbitrary number, but once you pick one, leave it fixed
 
 prec_dm = 'float32'
-prec_dm_target = 'float32'
+prec_dm_target = 'float64'
+
+convert_dm_to_delta = False
+convert_dm_target_to_delta = True
 
 # ***********************************************
 # ***********************************************
@@ -191,9 +196,14 @@ ti = time.time()
 # Set the seed for reproducibility
 np.random.seed(seed)
 
-# Make initial check
+# Make initial checks on input options
 if correct_power==True and apply_nl_transform==True:
     print('Error: iterative power correction and application of a NL transform are incompatible.')
+    print('Switch on only one of the two. Exiting.')
+    exit()
+
+if apply_nl_transform==True and apply_linear_rescaling ==True:
+    print('Error: application of a NL transform and of a linear rescaling are incompatible.')
     print('Switch on only one of the two. Exiting.')
     exit()
 
@@ -219,9 +229,20 @@ else:
 raw1 = np.fromfile(filename, dtype=dtype_dm)
 raw1 = np.reshape(raw1, (ngrid,ngrid,ngrid))
 
+if convert_dm_to_delta == True:
+    raw1 = raw1/np.mean(raw1) - 1.
+
 raw2 = np.fromfile(target_filename, dtype=dtype_dm_target)
 raw2 = np.reshape(raw2, (ntarget,ntarget,ntarget))
 
+if convert_dm_target_to_delta == True:
+    raw2 = raw2/np.mean(raw2) - 1.
+
+print('')
+print('DIAGNOSTICS: ')
+print('Min, max, mean DM: ', np.amin(raw1), np.amax(raw1), np.mean(raw1))
+print('Min, max, mean DM target: ', np.amin(raw2), np.amax(raw2), np.mean(raw2))
+print('')
 
 if ntarget>ngrid:
 
@@ -301,26 +322,52 @@ for ii in range(niter):
 
             def chisquare(xbase, raw1dummy):
 
-                raw1newdummy = xbase**raw1dummy/np.mean(xbase**raw1dummy) - 1.
+                raw1dummy = np.reshape(raw1dummy, (ngrid,ngrid,ngrid))
+                raw2dummy = np.reshape(raw2, (ngrid,ngrid,ngrid)) 
 
-                raw2smooth = scipy.ndimage.gaussian_filter(raw2, sigma=60/(lbox/ngrid), mode='wrap')
+                raw1dummy = xbase**raw1dummy/np.mean(xbase**raw1dummy) - 1.
+
+                raw2smooth = scipy.ndimage.gaussian_filter(raw2dummy, sigma=60/(lbox/ngrid), mode='wrap')
                 vartarget = np.std(raw2smooth)
 
-                raw1newsmooth = scipy.ndimage.gaussian_filter(raw1newdummy, sigma=60/(lbox/ngrid), mode='wrap')
-                vartmp = np.std(raw1newsmooth)
+                raw1smooth = scipy.ndimage.gaussian_filter(raw1dummy, sigma=60/(lbox/ngrid), mode='wrap')
+                vartmp = np.std(raw1smooth)
 
                 chisq = (vartarget-vartmp)**2
 
                 return chisq
 
-            res = scipy.optimize.minimize(chisquare, [1.], args=(raw1new))
-            base = res[0]
+            res = scipy.optimize.minimize(chisquare, [base_nl], args=(raw1new))
+            base = res['x']
+            print(base)
 
         else:
             base = base_nl
             
         raw1new = base**raw1new/np.mean(base**raw1new) - 1.
 
+    if apply_linear_rescaling==True:
+
+        raw1tmp = np.reshape(raw1new, (ngrid,ngrid,ngrid))
+        raw2tmp = np.reshape(raw2, (ngrid,ngrid,ngrid))
+        kk2linresc, pk2linresc, nmode2linresc = measure_spectrum(raw2tmp, ngrid)
+            
+        def chisquare(norm):
+
+            raw1ttmp = (raw1tmp+1)*norm - 1.
+            
+            kk1linresc, pk1linresc, nmode1linresc = measure_spectrum(raw1ttmp, ngrid)
+
+            chisq = np.sum((pk1linresc[1:10]/pk2linresc[1:10] - 1.)**2)
+            
+            return chisq
+
+        res = scipy.optimize.minimize(chisquare, [1.])
+        nnorm = res['x']
+
+        raw1new = (raw1new+1)*nnorm - 1.
+
+        print('TEST: ', np.amin(raw1new), np.amax(raw1new), np.mean(raw1new))
 
     print('Measuring new P(k) and computing kernel ...')
     raw1new = np.reshape(raw1new, (ngrid,ngrid,ngrid))
@@ -336,7 +383,7 @@ for ii in range(niter):
     pkchisq = np.sum((pktemp-pkt)**2)
 
     print('P(k) chi square: ', pkchisq)
-    print('P(k) large-scale bias: ', np.mean(pktemp[:10]/pkt[:,10]))
+    print('P(k) large-scale bias: ', np.mean(pktemp[:10]/pkt[:10]))
 
     itlist.append(ii)
     pkchisqlist.append(pkchisq)
