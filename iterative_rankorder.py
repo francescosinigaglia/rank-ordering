@@ -186,12 +186,14 @@ def get_power(fsignal, Nbin, kmax, dk, kmode, power, nmode, nc):
 # ***********************************************                                             
 # ***********************************************
 
+ti = time.time()
+
 # Set the seed for reproducibility
 np.random.seed(seed)
 
 # Make initial check
 if correct_power==True and apply_nl_transform==True:
-    print('Error: terative power correction and application of a NL transform are incompatible.')
+    print('Error: iterative power correction and application of a NL transform are incompatible.')
     print('Switch on only one of the two. Exiting.')
     exit()
 
