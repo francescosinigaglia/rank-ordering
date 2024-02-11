@@ -2,17 +2,25 @@ import numpy as np
 #import matplotlib.pyplot as plt
 from numba import njit, prange
 import time
+import scipy.optimize
+import scipy.ndimage
 
-ngrid = 360
-lbox = 2000
+ngrid = 256
+lbox = 1000
 
-niter = 200
-correct_power = True
+ntarget = 1024
+
+niter = 1
+correct_power = False
 
 filename = 'dm_field_abacus_rankorder.DAT'
 target_filename = 'dm_field_random1_tetcorr.DAT'
 
 outfilename = 'out_field.dat'
+
+apply_nl_transform = True
+calibrate_nl_transform = True
+base_nl = 1.35
 
 # WARNING:
 # The correct_power option makes sense only in the case in which niter>1.
@@ -22,6 +30,13 @@ outfilename = 'out_field.dat'
 #          If correct_power=False, it doesn't compensate for the error introduced in the P(k)
 #          If correct_power=True, it applies a kernel to compensate the error in the P(k)
 # niter>1: set correct_power=True 
+
+# Use either iterative rank ordering, or NL transform. At the moment, if both options are enabled, the code throws an error ad exits.
+
+seed = 123456 # Arbitrary number, but once you pick one, leave it fixed
+
+prec_dm = 'float32'
+prec_dm_target = 'float32'
 
 # ***********************************************
 # ***********************************************
@@ -171,17 +186,65 @@ def get_power(fsignal, Nbin, kmax, dk, kmode, power, nmode, nc):
 # ***********************************************                                             
 # ***********************************************
 
+# Set the seed for reproducibility
+np.random.seed(seed)
+
+# Make initial check
+if correct_power==True and apply_nl_transform==True:
+    print('Error: terative power correction and application of a NL transform are incompatible.')
+    print('Switch on only one of the two. Exiting.')
+    exit()
+
 # Import fields
 
 if niter>1:
     correct_power = True
 
-raw1 = np.fromfile(filename, dtype=np.float32)
+if prec_dm=='float32':
+    dtype_dm=np.float32
+elif prec_dm=='float64':
+    dtype_dm=np.float64
+else:
+    print('Error: precision type not found. Exiting.')
+
+if prec_dm_target=='float32':
+    dtype_dm_target=np.float32
+elif prec_dm_target=='float64':
+    dtype_dm_target=np.float64
+else:
+    print('Error: precision type not found. Exiting.')
+
+raw1 = np.fromfile(filename, dtype=dtype_dm)
 raw1 = np.reshape(raw1, (ngrid,ngrid,ngrid))
 
-raw2 = np.fromfile(target_filename, dtype=np.float32)
-raw2 = np.reshape(raw2, (ngrid,ngrid,ngrid))
+raw2 = np.fromfile(target_filename, dtype=dtype_dm_target)
+raw2 = np.reshape(raw2, (ntarget,ntarget,ntarget))
 
+
+if ntarget>ngrid:
+
+    print('Found ntarget>ngrid. Extracting a random subset of cells from the full target field.')
+
+    dummyrange = np.arange(ntarget**3)
+    np.random.shuffle(dummyrange)
+    dummy = dummyrange[:ngrid**3]
+
+    raw2= raw2.flatten()
+
+    raw2 = raw2[dummy]
+
+    raw2 = np.reshape(raw2, (ngrid,ngrid,ngrid))
+    
+elif ntarget<ngrid:
+
+    print('Found ntarget<ngrid. This case is not implemented. Set ntarget>=ngrid. Exiting')
+    exit()
+
+else:
+    print('Found ntarget=ngrid. All good, keep on going.')
+
+    
+# Measure power spectra    
 kkt, pkt, nmodet = measure_spectrum(raw2, ngrid)
 kk1, pk1, nmode1 = measure_spectrum(raw1, ngrid)
 
@@ -230,10 +293,37 @@ for ii in range(niter):
     print('Applyng rank ordering ...')
     raw1new = rankorder(ngrid, raw1new, raw2copy, raw1ind)
 
+    if apply_nl_transform == True:
+
+        if calibrate_nl_transform==True:
+
+            def chisquare(xbase, raw1dummy):
+
+                raw1newdummy = xbase**raw1dummy/np.mean(xbase**raw1dummy) - 1.
+
+                raw2smooth = scipy.ndimage.gaussian_filter(raw2, sigma=60/(lbox/ngrid), mode='wrap')
+                vartarget = np.std(raw2smooth)
+
+                raw1newsmooth = scipy.ndimage.gaussian_filter(raw1newdummy, sigma=60/(lbox/ngrid), mode='wrap')
+                vartmp = np.std(raw1newsmooth)
+
+                chisq = (vartarget-vartmp)**2
+
+                return chisq
+
+            res = scipy.optimize.minimize(chisquare, [1.], args=(raw1new))
+            base = res[0]
+
+        else:
+            base = base_nl
+            
+        raw1new = base**raw1new/np.mean(base**raw1new) - 1.
+
+
     print('Measuring new P(k) and computing kernel ...')
     raw1new = np.reshape(raw1new, (ngrid,ngrid,ngrid))
     kktemp, pktemp, nmodetemp = measure_spectrum(raw1new, ngrid)
-    raw1ew = raw1new.flatten()
+    raw1new = raw1new.flatten()
 
     #print(pkt/pktemp)
     kerntemp = np.sqrt(pkt / pktemp)
@@ -244,6 +334,7 @@ for ii in range(niter):
     pkchisq = np.sum((pktemp-pkt)**2)
 
     print('P(k) chi square: ', pkchisq)
+    print('P(k) large-scale bias: ', np.mean(pktemp[:10]/pkt[:,10]))
 
     itlist.append(ii)
     pkchisqlist.append(pkchisq)
@@ -252,19 +343,21 @@ for ii in range(niter):
     print('')
     print('')
 
-raw1new.astype('float32').tofile(outfilename)
+raw1new.astype(prec_dm).tofile(outfilename)
 
-f = open('kernel_interative.txt', 'w')
-
-for jj in range(len(kern)):
-    f.write(str(kkt[jj]) + '      ' + str(kern[jj]) + '\n')
-f.close()
-
-g = open('chisquare.txt', 'w')
-
-for jj in range(len(itlist)):
-    g.write(str(itlist[jj]) + '      ' + str(pkchisqlist[jj]) + '\n')
-g.close()
+if niter>1 and correct_power==True:
+    
+    f = open('kernel_interative.txt', 'w')
+    for jj in range(len(kern)):
+        f.write(str(kkt[jj]) + '      ' + str(kern[jj]) + '\n')
+        
+    f.close()
+    
+    g = open('chisquare.txt', 'w')
+    
+    for jj in range(len(itlist)):
+        g.write(str(itlist[jj]) + '      ' + str(pkchisqlist[jj]) + '\n')
+    g.close()
     
 tf = time.time()
 print('Elapsed %s hours ...' %str((tf-ti)/3600.))
